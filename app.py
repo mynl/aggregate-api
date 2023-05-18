@@ -1,71 +1,98 @@
 from flask import Flask, request, jsonify
-from aggregate import build#, qd
+from aggregate import build, Aggregate, Distortion, qd
+import json
+
+
 #import pandas as pd
 
 app = Flask(__name__)
+
+app.config["DEBUG"] = True
 
 #app = cors(app, allow_origin="https://gpt.myinsuranceanalyst.com")
 
 
 @app.route('/')
 def test():
-
     return 'test'
-# this runs at myinsuranceanalyst.com
 
 
 @app.route('/price', methods=['GET', 'POST'])
 def aggregate_start():
+    """
+    Build an aggregate and distortion. Then Price.
+
+    Expects and input of the form:
+
+        { 'agg': { arguments}, 'distortion': {args}. 'pricing': {args}}
+
+    All of the args are optional. With this design it is easy to add more potential args.
+
+    """
+    # convert args into a dictionary
     request_data = request.get_json()
-    insert_data = {'name': 'Comm.Auto',
-                   'type': 'agg',
-                   'claims_count': '10',
-                   'attach': 0,
-                   'lmt': 10000,
-                   'sev_dist': 'lognorm',
-                   'sev_mean': 50,
-                   'sev_cv': 4,
-                   'freq_dist': 'poisson',
-                   'distortion_label': 'myDUAL',
-                   'distortion_name': 'dual',
-                   'distortion_param': '1.94363',
-                   'percentile': .99
-                   }
 
-    if request_data:
-        for field_name in insert_data:
-            if field_name in request_data:
-                insert_data[field_name] = request_data[field_name]
+    # default data
+    defaults = {
 
-    build_stmt_base = "{type} {name} {claims_count} claims {lmt} xs {attach} " \
-                      "sev {sev_dist} {sev_mean} cv {sev_cv} {freq_dist}"
+        'agg': {
+            'name': 'Comm.Auto',
+            'exp_en': 10,
+            'exp_attachment': 0,
+            'exp_limit': 10000,
+            'sev_name': 'lognorm',
+            'sev_mean': 50,
+            'sev_cv': 4,
+            'freq_name': 'poisson'},
 
-    build_stmt = build_stmt_base.format(name=insert_data['name'],
-                                        type=insert_data['type'],
-                                        claims_count=insert_data['claims_count'],
-                                        lmt=insert_data['lmt'],
-                                        attach=insert_data['attach'],
-                                        sev_dist=insert_data['sev_dist'],
-                                        sev_mean=insert_data['sev_mean'],
-                                        sev_cv=insert_data['sev_cv'],
-                                        freq_dist=insert_data['freq_dist'].lower())
-    print(build_stmt)
-    #a = build('agg Comm.Auto '
-    #          '10 claims '
-    #          '10000 xs 0 '
-    #          'sev lognorm 50 cv 4 '
-    #          'poisson')
+        'distortion': {
+            'name': 'dual',
+            'shape': 1.94363,
+            'display_name': 'myDUAL',
+        },
 
-    a = build(build_stmt)
-    dist_stmt_base = 'distortion {distortion_label} {distortion_name} {distortion_param}'
-    dist_stmt = dist_stmt_base.format(distortion_label=insert_data['distortion_label'],
-                                      distortion_name=insert_data['distortion_name'],
-                                      distortion_param=insert_data['distortion_param'])
-    #d = build('distortion myDUAL dual 1.94363')
-    d = build(dist_stmt.lower())
-    result = a.price(insert_data['percentile'], d)
+        'pricing': {'percentile': .99}
+    }
+
+    for k, v in defaults.items():
+        in_data = request_data.get(k, None)
+        if in_data is not None:
+            v.update(in_data)
+
+    print(defaults)
+
+    a = Aggregate(**defaults['agg'])
+    a.update()
+    qd(a)
+
+    d = Distortion(**defaults['distortion'])
+
+    result = a.price(defaults['pricing']['percentile'], d)
 
     return jsonify({'result': result.to_json()})
+
+
+@app.route('/decl', methods=['GET', 'POST'])
+def aggregate_run_decl():
+    """
+    Run a decl program.
+
+    """
+    request_data = request.get_json()
+    decls = request_data.get('decl', None)
+
+    results = {}
+    if decls is not None:
+        for decl in decls:
+            print(decl)
+            try:
+                ob = build(decl)
+            except ValueError as e:
+                results[decl] = f'Value error {e}'
+            else:
+                results[decl] = ob.describe.to_json()
+
+    return jsonify({'result': json.dumps(results)})
 
 
 if __name__ == "__main__":
